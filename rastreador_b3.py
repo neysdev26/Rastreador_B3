@@ -190,8 +190,6 @@ if __name__ == "__main__":
             time.sleep(300)
     except KeyboardInterrupt:
         print("\n👋 Execução interrompida manualmente pelo usuário. Até logo!")
-```
-eof
 
 ### O que mudou e como usar:
 1. **Layout Premium Ativo:** Os alertas agora chegam no Discord em formato de cards estruturados com as cores exatas (verde para compra, vermelho para venda), blocos de código cinza escuro para isolar os dados técnicos e links rápidos para análise.
