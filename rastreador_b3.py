@@ -19,7 +19,7 @@ EMA_RAPIDA = 9
 EMA_LENTA = 21
 
 # Webhook do Discord (substitua pela sua URL)
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1509918416008515654/TuvG64GT0ye6qGicCA8ib1ScsSdKkUZWo5NSvbxDUl-ruhdzqqSoTIsn7uCKB0S1o7lx"
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK", "")
 
 # ==========================================
 # FUNÇÕES AUXILIARES
