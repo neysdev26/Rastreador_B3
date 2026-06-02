@@ -25,7 +25,7 @@ def carregar_carteira():
         return [linha.strip() for linha in f if linha.strip() and not linha.startswith('#')]
 
 def analisar_ativo_rastreador(ticker, ema_r=EMA_RAPIDA_DEFAULT, ema_l=EMA_LENTA_DEFAULT):
-    """Retorna um dicionário com dados do último dia e indicadores."""
+    """Retorna um dicionário com dados completos do último dia e indicadores."""
     try:
         t = yf.Ticker(ticker)
         df = t.history(period="6mo")
@@ -33,6 +33,9 @@ def analisar_ativo_rastreador(ticker, ema_r=EMA_RAPIDA_DEFAULT, ema_l=EMA_LENTA_
             return None
 
         close = df['Close']
+        open_ = df['Open']
+        high = df['High']
+        low = df['Low']
         volume = df['Volume']
 
         ema_rapida = close.ewm(span=ema_r, adjust=False).mean()
@@ -47,33 +50,42 @@ def analisar_ativo_rastreador(ticker, ema_r=EMA_RAPIDA_DEFAULT, ema_l=EMA_LENTA_
         rs = gain / loss
         rsi = 100 - (100 / (1 + rs))
 
-        ultimo_idx = df.index[-1]
+        ultimo = df.index[-1]
         preco = close.iloc[-1]
+        abertura = open_.iloc[-1]
+        maxima = high.iloc[-1]
+        minima = low.iloc[-1]
+        vol = volume.iloc[-1]
+        rsi_val = rsi.iloc[-1]
+
+        # Variação diária (fechamento vs fechamento anterior)
         preco_anterior = close.iloc[-2] if len(close) > 1 else preco
         variacao = (preco - preco_anterior) / preco_anterior * 100
-        vol_ultimo = volume.iloc[-1]
-        rsi_ultimo = rsi.iloc[-1]
 
         return {
             'ticker': ticker,
             'preco': preco,
+            'abertura': abertura,
+            'maxima': maxima,
+            'minima': minima,
             'variacao': variacao,
-            'volume': vol_ultimo,
-            'rsi': rsi_ultimo,
+            'volume': vol,
+            'rsi': rsi_val,
             'sinal_compra': sinal_compra.iloc[-1],
             'sinal_venda': sinal_venda.iloc[-1],
             'ema_rapida': ema_rapida.iloc[-1],
             'ema_lenta': ema_lenta.iloc[-1],
-            'data': ultimo_idx
+            'data': ultimo
         }
     except Exception as e:
         print(f"Erro ao processar {ticker}: {e}")
         return None
+    
+    ###Enviar mensagens para o Discord
 
 def enviar_discord(dados, tipo):
-    """Envia embed rico para o Discord."""
+    """Envia embed rico e completo para o Discord."""
     if not DISCORD_WEBHOOK_URL:
-        print("⚠️ URL do Discord não configurada.")
         return False
 
     if tipo == 'COMPRA':
@@ -87,37 +99,47 @@ def enviar_discord(dados, tipo):
 
     ticker_limpo = dados['ticker'].split('.')[0]
     preco = dados['preco']
+    abertura = dados['abertura']
+    maxima = dados['maxima']
+    minima = dados['minima']
     variacao = dados['variacao']
     volume = dados['volume']
     rsi = dados['rsi']
 
+    # Formata volume (ex: 1.2M, 500K) – opcional
+    if volume and volume > 0:
+        if volume >= 1e6:
+            vol_str = f"{volume/1e6:.1f}M"
+        elif volume >= 1e3:
+            vol_str = f"{volume/1e3:.0f}K"
+        else:
+            vol_str = f"{volume:.0f}"
+    else:
+        vol_str = "N/D"
+
+    # Monta mensagem principal (description)
+    descricao = (
+        f"{emoji} **{ticker_limpo} - SINAL DE {acao}**\n"
+        f"💰 **Fechamento:** R$ {preco:.2f} ({variacao:+.2f}%)\n"
+        f"📈 **Abertura:** R$ {abertura:.2f}\n"
+        f"📊 **Máxima:** R$ {maxima:.2f}  |  **Mínima:** R$ {minima:.2f}\n"
+        f"📦 **Volume:** {vol_str}\n"
+        f"📉 **RSI (14):** {rsi:.1f}"
+    )
+
     embed = {
-        "title": f"{emoji} SINAL DE {acao} - {ticker_limpo}",
+        "title": "Alerta do Rastreador B3",
+        "description": descricao,
         "color": cor,
         "fields": [
             {
-                "name": "💰 Preço Atual",
-                "value": f"R$ {preco:.2f} ({variacao:+.2f}%)",
-                "inline": True
-            },
-            {
-                "name": "📊 Volume",
-                "value": f"{volume:,.0f}" if volume else "N/D",
-                "inline": True
-            },
-            {
-                "name": "📈 RSI (14)",
-                "value": f"{rsi:.1f}",
-                "inline": True
-            },
-            {
                 "name": "🧠 Estratégia",
-                "value": f"EMA {EMA_RAPIDA_DEFAULT} cruzou {'ACIMA' if tipo=='COMPRA' else 'ABAIXO'} da EMA {EMA_LENTA_DEFAULT}",
+                "value": f"EMA {EMA_RAPIDA_DEFAULT} cruzou **{'ACIMA' if tipo=='COMPRA' else 'ABAIXO'}** da EMA {EMA_LENTA_DEFAULT}",
                 "inline": False
             }
         ],
         "timestamp": dados['data'].isoformat(),
-        "footer": {"text": "Rastreador B3 • Apenas informativo"}
+        "footer": {"text": "Sistema de Análise Técnica • Apenas informativo"}
     }
 
     payload = {"embeds": [embed]}
