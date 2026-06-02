@@ -51,8 +51,6 @@ def analisar_ativo(ticker):
 
 def rodar_rastreador():
     print(f"Iniciando {datetime.now()}")
-    # 🧪 TESTE FORÇADO (remova depois)
-    enviar_discord("🧪 Teste via GitHub Actions", cor=0x00ff00)
     ativos = carregar_carteira()
     for ativo in ativos:
         ult = analisar_ativo(ativo)
