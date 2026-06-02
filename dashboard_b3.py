@@ -24,8 +24,8 @@ ARQUIVO_ALERTAS = "alertas.csv"
 EMA_RAPIDA_DEFAULT = 9
 EMA_LENTA_DEFAULT = 21
 
-# Webhook do Discord (substitua pela sua URL)
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1509918416008515654/TuvG64GT0ye6qGicCA8ib1ScsSdKkUZWo5NSvbxDUl-ruhdzqqSoTIsn7uCKB0S1o7lx"
+# Webhook do Discord (será substituído por segredo no Streamlit Cloud)
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK", "")
 
 # ==========================================
 # FUNÇÕES DE CARTEIRA
@@ -43,7 +43,7 @@ def salvar_carteira(lista):
             f.write(f"{t}\n")
 
 # ==========================================
-# FUNÇÕES DE ANÁLISE (para gráficos)
+# FUNÇÕES DE ANÁLISE (gráficos)
 # ==========================================
 @st.cache_data(ttl=300)
 def carregar_dados(tickers, periodo, ema_r, ema_l):
@@ -55,7 +55,6 @@ def carregar_dados(tickers, periodo, ema_r, ema_l):
             if df.empty:
                 continue
 
-            # Calcula indicadores
             df[f'EMA_{ema_r}'] = df['Close'].ewm(span=ema_r, adjust=False).mean()
             df[f'EMA_{ema_l}'] = df['Close'].ewm(span=ema_l, adjust=False).mean()
 
@@ -64,20 +63,17 @@ def carregar_dados(tickers, periodo, ema_r, ema_l):
             df['Sinal_Venda'] = (df[f'EMA_{ema_r}'] < df[f'EMA_{ema_l}']) & \
                                 (df[f'EMA_{ema_r}'].shift(1) >= df[f'EMA_{ema_l}'].shift(1))
 
-            # RSI (14)
             delta = df['Close'].diff()
             gain = delta.clip(lower=0).rolling(14).mean()
             loss = (-delta.clip(upper=0)).rolling(14).mean()
             rs = gain / loss
             df['RSI'] = 100 - (100 / (1 + rs))
 
-            # Bandas de Bollinger (20, 2)
             df['BB_media'] = df['Close'].rolling(20).mean()
             bb_std = df['Close'].rolling(20).std()
             df['BB_superior'] = df['BB_media'] + 2 * bb_std
             df['BB_inferior'] = df['BB_media'] - 2 * bb_std
 
-            # MACD (12,26,9)
             ema12 = df['Close'].ewm(span=12, adjust=False).mean()
             ema26 = df['Close'].ewm(span=26, adjust=False).mean()
             df['MACD'] = ema12 - ema26
@@ -97,27 +93,23 @@ def criar_grafico_principal(df, ticker, ema_r, ema_l, mostrar_sinais=True):
         subplot_titles=(f"📈 {ticker}", "📊 Volume", "📉 RSI (14)")
     )
 
-    # Candlestick
     fig.add_trace(go.Candlestick(
         x=df.index, open=df['Open'], high=df['High'],
         low=df['Low'], close=df['Close'], name='OHLC',
         increasing_line_color='#26a69a', decreasing_line_color='#ef5350'
     ), row=1, col=1)
 
-    # Médias
     fig.add_trace(go.Scatter(x=df.index, y=df[f'EMA_{ema_r}'],
                              name=f'EMA {ema_r}', line=dict(color='#FFD700', width=1.5)), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df[f'EMA_{ema_l}'],
                              name=f'EMA {ema_l}', line=dict(color='#FF6B6B', width=1.5)), row=1, col=1)
 
-    # Bandas de Bollinger
     fig.add_trace(go.Scatter(x=df.index, y=df['BB_superior'],
                              line=dict(color='gray', width=1, dash='dash'), name='BB Superior'), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['BB_inferior'],
                              line=dict(color='gray', width=1, dash='dash'),
                              fill='tonexty', name='BB Inferior'), row=1, col=1)
 
-    # Sinais de cruzamento
     if mostrar_sinais:
         compras = df[df['Sinal_Compra']]
         vendas = df[df['Sinal_Venda']]
@@ -128,12 +120,10 @@ def criar_grafico_principal(df, ticker, ema_r, ema_l, mostrar_sinais=True):
                                  mode='markers', name='Venda',
                                  marker=dict(symbol='triangle-down', size=12, color='red')), row=1, col=1)
 
-    # Volume
     colors = ['#26a69a' if df['Close'].iloc[i] >= df['Open'].iloc[i] else '#ef5350' for i in range(len(df))]
     fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='Volume',
                          marker_color=colors, opacity=0.5), row=2, col=1)
 
-    # RSI
     fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name='RSI',
                              line=dict(color='purple', width=2)), row=3, col=1)
     fig.add_hline(y=70, line_dash="dash", line_color="red", opacity=0.5, row=3, col=1)
@@ -150,28 +140,116 @@ def criar_grafico_principal(df, ticker, ema_r, ema_l, mostrar_sinais=True):
     return fig
 
 # ==========================================
-# FUNÇÕES DO RASTREADOR (varredura de sinais)
+# FUNÇÕES DO RASTREADOR (varredura + Discord)
 # ==========================================
 def analisar_ativo_rastreador(ticker, ema_r=EMA_RAPIDA_DEFAULT, ema_l=EMA_LENTA_DEFAULT):
-    """Coleta dados e retorna o último registro com indicadores e sinais."""
+    """Retorna dicionário com dados do último dia e indicadores."""
     try:
-        ticker_obj = yf.Ticker(ticker)
-        df = ticker_obj.history(period="6mo")
+        t = yf.Ticker(ticker)
+        df = t.history(period="6mo")
         if df.empty:
             return None
 
-        df = df[['Close']].copy()
-        df.columns = ['preco_fechamento']
+        close = df['Close']
+        volume = df['Volume']
 
-        df['EMA_rapida'] = df['preco_fechamento'].ewm(span=ema_r, adjust=False).mean()
-        df['EMA_lenta'] = df['preco_fechamento'].ewm(span=ema_l, adjust=False).mean()
+        ema_rapida = close.ewm(span=ema_r, adjust=False).mean()
+        ema_lenta = close.ewm(span=ema_l, adjust=False).mean()
 
-        df['Sinal_Compra'] = (df['EMA_rapida'] > df['EMA_lenta']) & (df['EMA_rapida'].shift(1) <= df['EMA_lenta'].shift(1))
-        df['Sinal_Venda'] = (df['EMA_rapida'] < df['EMA_lenta']) & (df['EMA_rapida'].shift(1) >= df['EMA_lenta'].shift(1))
+        sinal_compra = (ema_rapida > ema_lenta) & (ema_rapida.shift(1) <= ema_lenta.shift(1))
+        sinal_venda = (ema_rapida < ema_lenta) & (ema_rapida.shift(1) >= ema_lenta.shift(1))
 
-        return df.iloc[-1]  # retorna a última linha
+        delta = close.diff()
+        gain = delta.clip(lower=0).rolling(14).mean()
+        loss = (-delta.clip(upper=0)).rolling(14).mean()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+
+        ultimo_idx = df.index[-1]
+        preco = close.iloc[-1]
+        preco_anterior = close.iloc[-2] if len(close) > 1 else preco
+        variacao = (preco - preco_anterior) / preco_anterior * 100
+        vol_ultimo = volume.iloc[-1]
+        rsi_ultimo = rsi.iloc[-1]
+
+        return {
+            'ticker': ticker,
+            'preco': preco,
+            'variacao': variacao,
+            'volume': vol_ultimo,
+            'rsi': rsi_ultimo,
+            'sinal_compra': sinal_compra.iloc[-1],
+            'sinal_venda': sinal_venda.iloc[-1],
+            'ema_rapida': ema_rapida.iloc[-1],
+            'ema_lenta': ema_lenta.iloc[-1],
+            'data': ultimo_idx
+        }
     except Exception as e:
+        print(f"Erro ao processar {ticker}: {e}")
         return None
+
+def enviar_discord(dados, tipo):
+    """Envia embed rico para o Discord (compra/venda)."""
+    if not DISCORD_WEBHOOK_URL:
+        return False
+
+    if tipo == 'COMPRA':
+        cor = 0x00ff00
+        emoji = "🟢"
+        acao = "COMPRA"
+    else:
+        cor = 0xff0000
+        emoji = "🔴"
+        acao = "VENDA"
+
+    ticker_limpo = dados['ticker'].split('.')[0]
+    preco = dados['preco']
+    variacao = dados['variacao']
+    volume = dados['volume']
+    rsi = dados['rsi']
+
+    embed = {
+        "title": f"{emoji} SINAL DE {acao} - {ticker_limpo}",
+        "color": cor,
+        "fields": [
+            {
+                "name": "💰 Preço Atual",
+                "value": f"R$ {preco:.2f} ({variacao:+.2f}%)",
+                "inline": True
+            },
+            {
+                "name": "📊 Volume",
+                "value": f"{volume:,.0f}" if volume else "N/D",
+                "inline": True
+            },
+            {
+                "name": "📈 RSI (14)",
+                "value": f"{rsi:.1f}",
+                "inline": True
+            },
+            {
+                "name": "🧠 Estratégia",
+                "value": f"EMA {EMA_RAPIDA_DEFAULT} cruzou {'ACIMA' if tipo=='COMPRA' else 'ABAIXO'} da EMA {EMA_LENTA_DEFAULT}",
+                "inline": False
+            }
+        ],
+        "timestamp": dados['data'].isoformat(),
+        "footer": {"text": "Rastreador B3 • Apenas informativo"}
+    }
+
+    payload = {"embeds": [embed]}
+
+    try:
+        resp = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
+        if resp.status_code == 204:
+            print("✅ Alerta enviado ao Discord!")
+            return True
+        else:
+            print(f"❌ Erro Discord: {resp.status_code} - {resp.text}")
+            return False
+    except Exception as e:
+        print(f"⚠️ Exceção Discord: {e}")
+        return False
 
 def salvar_alerta(ticker, preco, tipo):
     """Registra o sinal em alertas.csv."""
@@ -186,33 +264,6 @@ def salvar_alerta(ticker, preco, tipo):
             f"{preco:.2f}",
             tipo
         ])
-
-def enviar_discord(mensagem, cor=0x00ff00):
-    """Envia embed para o Discord."""
-    # A URL já está definida; removemos a verificação que bloqueava o envio
-    if not DISCORD_WEBHOOK_URL or DISCORD_WEBHOOK_URL == "COLE_AQUI_SUA_URL":
-        print("⚠️ URL do Discord não configurada.")
-        return False
-    payload = {
-        "embeds": [{
-            "title": "Alerta do Rastreador B3",
-            "description": mensagem,
-            "color": cor,
-            "timestamp": datetime.now().isoformat(),
-            "footer": {"text": "Sistema de Análise Técnica"}
-        }]
-    }
-    try:
-        resp = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
-        if resp.status_code == 204:
-            print("✅ Alerta enviado ao Discord!")
-            return True
-        else:
-            print(f"❌ Falha no Discord: {resp.status_code} - {resp.text}")
-            return False
-    except Exception as e:
-        print(f"⚠️ Erro de conexão com Discord: {e}")
-        return False
 
 # ==========================================
 # INTERFACE PRINCIPAL
@@ -260,10 +311,10 @@ ema_r = st.sidebar.slider("Período EMA rápida:", 5, 20, EMA_RAPIDA_DEFAULT)
 ema_l = st.sidebar.slider("Período EMA lenta:", 15, 50, EMA_LENTA_DEFAULT)
 mostrar_sinais = st.sidebar.checkbox("Mostrar sinais de cruzamento", value=True)
 
-# ----- ABA PRINCIPAL -----
+# ----- ABAS -----
 tab1, tab2, tab3 = st.tabs(["📈 Análise Técnica", "🔍 Varredura de Sinais", "📋 Histórico de Alertas"])
 
-# ==================== TAB 1: ANÁLISE TÉCNICA ====================
+# ==================== TAB 1 ====================
 with tab1:
     if not carteira_sel:
         st.warning("Selecione pelo menos um ativo na barra lateral.")
@@ -274,7 +325,6 @@ with tab1:
         if not dados:
             st.error("Não foi possível carregar os dados.")
         else:
-            # Abas por ativo (se mais de um) ou exibição direta
             if len(dados) > 1:
                 subtabs = st.tabs([t for t in dados.keys()])
                 for subtab, ticker in zip(subtabs, dados.keys()):
@@ -378,55 +428,40 @@ with tab1:
                         })
                         st.dataframe(sinais_df, hide_index=True, use_container_width=True)
 
-# ==================== TAB 2: VARREDURA DE SINAIS ====================
+# ==================== TAB 2 ====================
 with tab2:
     st.header("🔍 Varredura de Sinais de Compra/Venda")
     st.markdown("Clique no botão abaixo para verificar todos os ativos da carteira e enviar alertas ao Discord (se configurado).")
 
     if st.button("🚀 Executar Varredura Agora", type="primary", use_container_width=True):
         with st.spinner("Analisando ativos..."):
-            # Teste único de conexão com Discord
-            enviar_discord("🧪 Teste de conexão com o Discord – tudo OK!", cor=0x3498db)
-
             ativos = carregar_carteira()
             if not ativos:
-                st.warning("Carteira vazia. Adicione tickers na barra lateral.")
+                st.warning("Carteira vazia.")
             else:
                 resultados = []
                 sinais_encontrados = False
                 for ticker in ativos:
-                    ultima = analisar_ativo_rastreador(ticker, ema_r, ema_l)
-                    if ultima is None:
-                        resultados.append({
-                            'Ticker': ticker,
-                            'Preço': 'N/D',
-                            'Sinal': 'Erro ao carregar',
-                            'Envio Discord': '❌'
-                        })
+                    dados = analisar_ativo_rastreador(ticker, ema_r, ema_l)
+                    if dados is None:
+                        resultados.append({'Ticker': ticker, 'Preço': 'N/D', 'Sinal': 'Erro', 'Envio Discord': '❌'})
                         continue
 
-                    preco = ultima['preco_fechamento']
+                    preco = dados['preco']
                     ticker_limpo = ticker.split('.')[0]
                     sinal = 'Neutro'
-                    cor_discord = None
-
-                    if ultima['Sinal_Compra']:
+                    if dados['sinal_compra']:
                         sinal = '🟢 COMPRA'
-                        cor_discord = 0x00ff00
                         sinais_encontrados = True
-                    elif ultima['Sinal_Venda']:
+                        discord_ok = '✅' if enviar_discord(dados, 'COMPRA') else '❌'
+                        salvar_alerta(ticker_limpo, preco, 'COMPRA')
+                    elif dados['sinal_venda']:
                         sinal = '🔴 VENDA'
-                        cor_discord = 0xff0000
                         sinais_encontrados = True
-
-                    # Envia Discord apenas se houver sinal
-                    discord_ok = '➖'
-                    if cor_discord is not None:
-                        msg = (f"**{ticker_limpo}** - SINAL DE {'COMPRA' if sinal=='🟢 COMPRA' else 'VENDA'}\n"
-                               f"💰 Preço: R$ {preco:.2f}\n"
-                               f"📈 EMA {ema_r} cruzou {'ACIMA' if sinal=='🟢 COMPRA' else 'ABAIXO'} da EMA {ema_l}")
-                        discord_ok = '✅' if enviar_discord(msg, cor_discord) else '❌'
-                        salvar_alerta(ticker_limpo, preco, 'COMPRA' if 'COMPRA' in sinal else 'VENDA')
+                        discord_ok = '✅' if enviar_discord(dados, 'VENDA') else '❌'
+                        salvar_alerta(ticker_limpo, preco, 'VENDA')
+                    else:
+                        discord_ok = '➖'
 
                     resultados.append({
                         'Ticker': ticker_limpo,
@@ -435,17 +470,16 @@ with tab2:
                         'Envio Discord': discord_ok
                     })
 
-                # Exibe tabela de resultados
                 st.subheader("Resultados da Varredura")
                 df_res = pd.DataFrame(resultados)
                 st.dataframe(df_res, hide_index=True, use_container_width=True)
 
                 if sinais_encontrados:
-                    st.success("✅ Sinais detectados e processados! Verifique o Discord e o histórico de alertas.")
+                    st.success("✅ Sinais detectados! Verifique o Discord e o histórico.")
                 else:
                     st.info("Nenhum sinal de cruzamento detectado no momento.")
 
-# ==================== TAB 3: HISTÓRICO DE ALERTAS ====================
+# ==================== TAB 3 ====================
 with tab3:
     st.header("📋 Histórico de Alertas Salvos")
     if os.path.exists(ARQUIVO_ALERTAS):
@@ -456,15 +490,9 @@ with tab3:
         else:
             st.info("Nenhum alerta registrado até o momento.")
     else:
-        st.info("Arquivo de alertas ainda não foi criado. Execute uma varredura para gerar o primeiro registro.")
+        st.info("Arquivo de alertas ainda não foi criado. Execute uma varredura.")
 
 # Rodapé
 st.markdown("---")
-col1, col2 = st.columns([3, 1])
-with col1:
-    st.caption(f"🕒 Última atualização da página: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')} | "
-               "⚠️ Apenas para fins informativos – não é recomendação de investimento.")
-with col2:
-    if st.sidebar.checkbox("🔄 Auto-refresh (5 min)"):
-        time.sleep(300)
-        st.rerun()
+st.caption(f"🕒 Última atualização: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')} | "
+           "⚠️ Apenas para fins informativos – não é recomendação de investimento.")
