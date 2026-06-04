@@ -171,22 +171,6 @@ def salvar_alerta(ticker, preco, tipo):
 # ==========================================
 def rodar_rastreador():
     print(f"--- Varredura iniciada em {datetime.now().strftime('%d/%m/%Y %H:%M')} ---")
-
-    # 🧪 TESTE FORÇADO (remova este bloco após confirmar que o Discord está funcionando)
-    dados_teste = {
-        'ticker': 'TESTE.SA',
-        'preco': 99.99,
-        'abertura': 99.00,
-        'maxima': 100.50,
-        'minima': 98.50,
-        'variacao': 1.23,
-        'volume': 1_500_000,
-        'rsi': 58.4,
-        'data': datetime.now()
-    }
-    enviar_discord(dados_teste, 'COMPRA')
-    # -----------------------------------------------------------
-
     ativos = carregar_carteira()
     if not ativos:
         print("⚠️ Carteira vazia.")
