@@ -58,7 +58,6 @@ def analisar_ativo_rastreador(ticker, ema_r=EMA_RAPIDA_DEFAULT, ema_l=EMA_LENTA_
         vol = volume.iloc[-1]
         rsi_val = rsi.iloc[-1]
 
-        # Variação diária (fechamento vs fechamento anterior)
         preco_anterior = close.iloc[-2] if len(close) > 1 else preco
         variacao = (preco - preco_anterior) / preco_anterior * 100
 
@@ -80,8 +79,6 @@ def analisar_ativo_rastreador(ticker, ema_r=EMA_RAPIDA_DEFAULT, ema_l=EMA_LENTA_
     except Exception as e:
         print(f"Erro ao processar {ticker}: {e}")
         return None
-    
-    ###Enviar mensagens para o Discord
 
 def enviar_discord(dados, tipo):
     """Envia embed rico e completo para o Discord."""
@@ -106,7 +103,7 @@ def enviar_discord(dados, tipo):
     volume = dados['volume']
     rsi = dados['rsi']
 
-    # Formata volume (ex: 1.2M, 500K) – opcional
+    # Formata volume
     if volume and volume > 0:
         if volume >= 1e6:
             vol_str = f"{volume/1e6:.1f}M"
@@ -117,7 +114,6 @@ def enviar_discord(dados, tipo):
     else:
         vol_str = "N/D"
 
-    # Monta mensagem principal (description)
     descricao = (
         f"{emoji} **{ticker_limpo} - SINAL DE {acao}**\n"
         f"💰 **Fechamento:** R$ {preco:.2f} ({variacao:+.2f}%)\n"
@@ -175,6 +171,22 @@ def salvar_alerta(ticker, preco, tipo):
 # ==========================================
 def rodar_rastreador():
     print(f"--- Varredura iniciada em {datetime.now().strftime('%d/%m/%Y %H:%M')} ---")
+
+    # 🧪 TESTE FORÇADO (remova este bloco após confirmar que o Discord está funcionando)
+    dados_teste = {
+        'ticker': 'TESTE.SA',
+        'preco': 99.99,
+        'abertura': 99.00,
+        'maxima': 100.50,
+        'minima': 98.50,
+        'variacao': 1.23,
+        'volume': 1_500_000,
+        'rsi': 58.4,
+        'data': datetime.now()
+    }
+    enviar_discord(dados_teste, 'COMPRA')
+    # -----------------------------------------------------------
+
     ativos = carregar_carteira()
     if not ativos:
         print("⚠️ Carteira vazia.")
